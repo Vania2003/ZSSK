@@ -9,6 +9,8 @@
 #include <sstream>
 #include <locale>
 #include <map>
+#include <thread>
+#include <mutex>
 
 #include "utils.h"
 #include "scheduler.h"
@@ -162,6 +164,70 @@ static void printSettingsHelp() {
     std::cout << "\nAll relative paths resolve from build dir (e.g. cmake-build-debug/)\n";
 }
 
+void runBatchExperiments(const std::string& folder,
+                         const std::string& csvPath,
+                         int threads,
+                         const LsParams& lsParams)
+{
+    namespace fs = std::filesystem;
+    std::vector<fs::path> files;
+
+    for (auto& entry : fs::directory_iterator(folder))
+        if (entry.path().extension() == ".txt")
+            files.push_back(entry.path());
+
+    if (files.empty()) {
+        std::cout << "No .txt files found in " << folder << "\n";
+        return;
+    }
+
+    std::mutex csvMutex;
+    std::atomic<size_t> nextIdx = 0;
+
+    auto worker = [&](int id) {
+        while (true) {
+            size_t idx = nextIdx++;
+            if (idx >= files.size()) break;
+            const auto& file = files[idx];
+            auto tasks = loadTasks(file.string());
+            if (tasks.empty()) continue;
+
+            auto t0 = std::chrono::steady_clock::now();
+            auto ord1 = sptOrder(tasks, threads);
+            long long s1 = calculateTotalCompletionTime(tasks, ord1);
+            long long t1 = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - t0).count();
+
+            auto t2 = std::chrono::steady_clock::now();
+            auto ord2 = cheapestInsertionOrder(tasks, threads);
+            long long s2 = calculateTotalCompletionTime(tasks, ord2);
+            long long t3 = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - t2).count();
+
+            auto t4 = std::chrono::steady_clock::now();
+            auto res = localSearch2Swap(tasks, lsParams, threads);
+            long long t5 = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - t4).count();
+
+            {
+                std::scoped_lock lock(csvMutex);
+                appendCsvRow(csvPath, file.filename().string(), "SPT", (int)tasks.size(), threads, t1, s1);
+                appendCsvRow(csvPath, file.filename().string(), "CheapestInsertion", (int)tasks.size(), threads, t3, s2);
+                appendCsvRow(csvPath, file.filename().string(), "LocalSearch", (int)tasks.size(), threads, t5, res.sumC);
+            }
+
+            std::cout << "[Thread " << id << "] Done: " << file.filename() << "\n";
+        }
+    };
+
+    std::vector<std::thread> pool;
+    for (int i = 0; i < threads; ++i)
+        pool.emplace_back(worker, i);
+    for (auto& th : pool) th.join();
+
+    std::cout << "Batch experiments completed for " << files.size() << " instances.\n";
+}
+
 int main() {
     std::vector<Task> tasks;
     std::string currentInstance = "NA";
@@ -178,6 +244,7 @@ int main() {
         std::cout << "5) Run Local Search 2-swap\n";
         std::cout << "6) Benchmark all (SPT, CI, LS)\n";
         std::cout << "7) Help (settings)\n";
+        std::cout << "8) Run batch experiments (parallel over multiple input files)\n"; // 💥 TĘ LINIE DODAJ
         std::cout << "0) Exit\n";
         std::cout << "Choose option: ";
 
@@ -325,8 +392,26 @@ int main() {
                 printSettingsHelp();
                 break;
 
+            case 8: {
+                std::string folder = askStr("Folder with input files", "data/inputs");
+                std::string csv = askStr("CSV output path", "batch_results.csv");
+                int threads = askInt("Threads (1/2/4/8)", 4);
+                int timeBudgetMs = askInt("LS: Time budget [ms]", 2000);
+                unsigned int seed = (unsigned int)askInt("Random seed", 42);
+                int noImproveFactor = askInt("No-improve tries factor (×n)", 1000);
+
+                LsParams lp;
+                lp.timeBudgetMs = timeBudgetMs;
+                lp.seed = seed;
+                lp.maxNoImproveTries = noImproveFactor * 200; // przykładowa wielkość
+
+                runBatchExperiments(folder, csv, threads, lp);
+                break;
+            }
+
             default:
                 std::cout << "Invalid option.\n";
+                break;
         }
     }
     return 0;
