@@ -187,6 +187,6 @@ LsResult localSearch2Swap(const std::vector<Task>& tasks,
     }
 
     res.order = order;
-    //res.sumC = bestSum;
+    res.sumC = bestSum;
     return res;
 }
