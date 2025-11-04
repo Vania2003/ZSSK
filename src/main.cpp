@@ -11,6 +11,7 @@
 #include <map>
 #include <thread>
 #include <mutex>
+#include <atomic>
 
 #include "utils.h"
 #include "scheduler.h"
@@ -43,6 +44,14 @@ static bool askYesNo(const std::string& prompt, bool defNo = true) {
     return !(c=='n' || c=='N');
 }
 
+long long calculateMakespan(const std::vector<Task>& tasks,
+                                   const std::vector<int>& order) {
+    long long total = 0;
+    for (int idx : order)
+        total += tasks[idx].p;
+    return total;
+}
+
 static DistributionType askDist() {
     std::cout << "Distribution (1=Uniform, 2=Bimodal) [1]: ";
     int d = 1;
@@ -71,19 +80,24 @@ static void appendCsvRow(const std::string& csvPath,
                          const std::string& algo,
                          int n, int threads,
                          long long timeMs,
-                         long long sumC)
+                         long long sumC,
+                         long long cmax)
 {
     namespace fs = std::filesystem;
     const char SEP = ';';
-    static std::map<std::string, long long> baselineTimes; // zapamiętuje czas dla threads=1
+    static std::map<std::string, long long> baselineTimes;
+    static std::mutex baselineMutex;
 
-    // Automatyczne obliczanie speedup i efficiency
     double speedup = 1.0, efficiency = 1.0;
-    if (threads == 1) {
-        baselineTimes[algo] = timeMs;
-    } else if (baselineTimes.contains(algo) && baselineTimes[algo] > 0) {
-        speedup = (double)baselineTimes[algo] / std::max(1.0, (double)timeMs);
-        efficiency = speedup / threads;
+    {
+        std::lock_guard<std::mutex> g(baselineMutex);
+        auto it = baselineTimes.find(algo);
+        if (threads == 1) {
+            baselineTimes[algo] = timeMs;
+        } else if (it != baselineTimes.end() && it->second > 0) {
+            speedup = static_cast<double>(it->second) / std::max(1.0, static_cast<double>(timeMs));
+            efficiency = speedup / threads;
+        }
     }
 
     fs::path p(csvPath);
@@ -102,7 +116,6 @@ static void appendCsvRow(const std::string& csvPath,
         return;
     }
 
-    // Zapis w UTF-8 z nagłówkiem
     out.imbue(std::locale::classic());
     if (newFile) {
         const unsigned char bom[3] = {0xEF, 0xBB, 0xBF};
@@ -110,10 +123,10 @@ static void appendCsvRow(const std::string& csvPath,
         out << "run_at" << SEP << "instance" << SEP << "algo" << SEP
             << "n" << SEP << "threads" << SEP
             << "time_ms" << SEP << "sumC" << SEP
+            << "Cmax" << SEP
             << "speedup" << SEP << "efficiency" << "\n";
     }
 
-    // Timestamp
     auto now = std::chrono::system_clock::now();
     std::time_t t = std::chrono::system_clock::to_time_t(now);
     std::tm lt{};
@@ -125,18 +138,18 @@ static void appendCsvRow(const std::string& csvPath,
     std::ostringstream ts;
     ts << std::put_time(&lt, "%Y-%m-%d %H:%M:%S");
 
-    // Formatowanie liczb
     std::ostringstream sp, ef;
     sp << std::fixed << std::setprecision(3) << speedup;
     ef << std::fixed << std::setprecision(3) << efficiency;
 
     out << ts.str() << SEP
-        << instanceId << SEP
-        << algo << SEP
+        << csvEscape(instanceId, SEP) << SEP
+        << csvEscape(algo, SEP) << SEP
         << n << SEP
         << threads << SEP
         << timeMs << SEP
         << sumC << SEP
+        << cmax << SEP
         << sp.str() << SEP
         << ef.str() << "\n";
 
@@ -145,25 +158,19 @@ static void appendCsvRow(const std::string& csvPath,
               << ", efficiency=" << ef.str() << ")\n";
 }
 
-
 static void printSettingsHelp() {
     std::cout << "\n-- Settings help --\n";
     std::cout << "threads: number of threads used in any algorithm (1/2/4/8).\n";
-    std::cout << "time budget [ms]: time limit per local-search iteration (prevents infinite runs).\n";
+    std::cout << "time budget [ms]: time limit per local-search iteration.\n";
     std::cout << "no-improve tries factor: limits local search effort, usually 1000*n.\n";
     std::cout << "seed: RNG seed; same seed -> reproducible results.\n";
     std::cout << "CSV path: output file (directories auto-created).\n";
-
     std::cout << "\nData generation / loading:\n";
     std::cout << " - Generate or load datasets from text files.\n";
     std::cout << " - If file missing, program can generate it automatically.\n";
-
     std::cout << "\nFile format:\n";
     std::cout << "   Line 1: n\n   Line 2: p1 p2 ... pn\n";
-
-    std::cout << "\nAll relative paths resolve from build dir (e.g. cmake-build-debug/)\n";
 }
-
 void runBatchExperiments(const std::string& folder,
                          const std::string& csvPath,
                          int threads,
@@ -171,7 +178,6 @@ void runBatchExperiments(const std::string& folder,
 {
     namespace fs = std::filesystem;
     std::vector<fs::path> files;
-
     for (auto& entry : fs::directory_iterator(folder))
         if (entry.path().extension() == ".txt")
             files.push_back(entry.path());
@@ -195,25 +201,28 @@ void runBatchExperiments(const std::string& folder,
             auto t0 = std::chrono::steady_clock::now();
             auto ord1 = sptOrder(tasks, threads);
             long long s1 = calculateTotalCompletionTime(tasks, ord1);
+            long long c1 = calculateMakespan(tasks, ord1);
             long long t1 = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - t0).count();
 
             auto t2 = std::chrono::steady_clock::now();
             auto ord2 = cheapestInsertionOrder(tasks, threads);
             long long s2 = calculateTotalCompletionTime(tasks, ord2);
+            long long c2 = calculateMakespan(tasks, ord2);
             long long t3 = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - t2).count();
 
             auto t4 = std::chrono::steady_clock::now();
             auto res = localSearch2Swap(tasks, lsParams, threads);
+            long long c3 = calculateMakespan(tasks, res.order);
             long long t5 = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - t4).count();
 
             {
                 std::scoped_lock lock(csvMutex);
-                appendCsvRow(csvPath, file.filename().string(), "SPT", (int)tasks.size(), threads, t1, s1);
-                appendCsvRow(csvPath, file.filename().string(), "CheapestInsertion", (int)tasks.size(), threads, t3, s2);
-                appendCsvRow(csvPath, file.filename().string(), "LocalSearch", (int)tasks.size(), threads, t5, res.sumC);
+                appendCsvRow(csvPath, file.filename().string(), "SPT", (int)tasks.size(), threads, t1, s1, c1);
+                appendCsvRow(csvPath, file.filename().string(), "CheapestInsertion", (int)tasks.size(), threads, t3, s2, c2);
+                appendCsvRow(csvPath, file.filename().string(), "LocalSearch", (int)tasks.size(), threads, t5, res.sumC, c3);
             }
 
             std::cout << "[Thread " << id << "] Done: " << file.filename() << "\n";
@@ -231,9 +240,8 @@ void runBatchExperiments(const std::string& folder,
 int main() {
     std::vector<Task> tasks;
     std::string currentInstance = "NA";
-    bool running = true;
 
-    while (running) {
+    while (true) {
         std::cout << "\n==============================\n";
         std::cout << " SINGLE MACHINE SCHEDULER\n";
         std::cout << "==============================\n";
@@ -244,7 +252,7 @@ int main() {
         std::cout << "5) Run Local Search 2-swap\n";
         std::cout << "6) Benchmark all (SPT, CI, LS)\n";
         std::cout << "7) Help (settings)\n";
-        std::cout << "8) Run batch experiments (parallel over multiple input files)\n"; // 💥 TĘ LINIE DODAJ
+        std::cout << "8) Run batch experiments (parallel over multiple input files)\n";
         std::cout << "0) Exit\n";
         std::cout << "Choose option: ";
 
@@ -287,13 +295,14 @@ int main() {
                 auto t0 = std::chrono::steady_clock::now();
                 auto order = sptOrder(tasks, threads);
                 long long sumC = calculateTotalCompletionTime(tasks, order);
+                long long cmax = calculateMakespan(tasks, order);
                 auto t1 = std::chrono::steady_clock::now();
                 long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 
-                std::cout << "SPT: sumC=" << sumC << " time=" << ms << " ms\n";
+                std::cout << "SPT: sumC=" << sumC << "  Cmax=" << cmax << "  time=" << ms << " ms\n";
                 if (askYesNo("Append to CSV?")) {
                     std::string csv = askStr("CSV path", "results.csv");
-                    appendCsvRow(csv, currentInstance, "SPT", (int)tasks.size(), threads, ms, sumC);
+                    appendCsvRow(csv, currentInstance, "SPT", (int)tasks.size(), threads, ms, sumC, cmax);
                 }
                 break;
             }
@@ -304,13 +313,14 @@ int main() {
                 auto t0 = std::chrono::steady_clock::now();
                 auto order = cheapestInsertionOrder(tasks, threads);
                 long long sumC = calculateTotalCompletionTime(tasks, order);
+                long long cmax = calculateMakespan(tasks, order);
                 auto t1 = std::chrono::steady_clock::now();
                 long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 
-                std::cout << "CheapestInsertion: sumC=" << sumC << " time=" << ms << " ms\n";
+                std::cout << "CheapestInsertion: sumC=" << sumC << "  Cmax=" << cmax << "  time=" << ms << " ms\n";
                 if (askYesNo("Append to CSV?")) {
                     std::string csv = askStr("CSV path", "results.csv");
-                    appendCsvRow(csv, currentInstance, "CheapestInsertion", (int)tasks.size(), threads, ms, sumC);
+                    appendCsvRow(csv, currentInstance, "CheapestInsertion", (int)tasks.size(), threads, ms, sumC, cmax);
                 }
                 break;
             }
@@ -331,13 +341,15 @@ int main() {
                 auto t0 = std::chrono::steady_clock::now();
                 auto res = localSearch2Swap(tasks, lp, threads);
                 long long sumC = res.sumC;
+                long long cmax = calculateMakespan(tasks, res.order);
                 auto t1 = std::chrono::steady_clock::now();
                 long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 
-                std::cout << "LocalSearch: sumC=" << sumC << " time=" << ms << " ms, threads=" << threads << "\n";
+                std::cout << "LocalSearch: sumC=" << sumC << "  Cmax=" << cmax
+                          << "  time=" << ms << " ms, threads=" << threads << "\n";
                 if (askYesNo("Append to CSV?")) {
                     std::string csv = askStr("CSV path", "results.csv");
-                    appendCsvRow(csv, currentInstance, "LocalSearch", (int)tasks.size(), threads, ms, sumC);
+                    appendCsvRow(csv, currentInstance, "LocalSearch", (int)tasks.size(), threads, ms, sumC, cmax);
                 }
                 break;
             }
@@ -360,30 +372,33 @@ int main() {
                     auto t0 = std::chrono::steady_clock::now();
                     auto ord = sptOrder(tasks, threads);
                     long long sumC = calculateTotalCompletionTime(tasks, ord);
-                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    long long cmax = calculateMakespan(tasks, ord);
+                    long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - t0).count();
-                    std::cout << "[BENCH] SPT: sumC=" << sumC << " time=" << ms << " ms\n";
-                    appendCsvRow(csv, currentInstance, "SPT", (int)tasks.size(), threads, ms, sumC);
+                    std::cout << "[BENCH] SPT: sumC=" << sumC << "  Cmax=" << cmax << "  time=" << ms << " ms\n";
+                    appendCsvRow(csv, currentInstance, "SPT", (int)tasks.size(), threads, ms, sumC, cmax);
                 }
                 // CI
                 {
                     auto t0 = std::chrono::steady_clock::now();
                     auto ord = cheapestInsertionOrder(tasks, threads);
                     long long sumC = calculateTotalCompletionTime(tasks, ord);
-                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    long long cmax = calculateMakespan(tasks, ord);
+                    long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - t0).count();
-                    std::cout << "[BENCH] CI: sumC=" << sumC << " time=" << ms << " ms\n";
-                    appendCsvRow(csv, currentInstance, "CheapestInsertion", (int)tasks.size(), threads, ms, sumC);
+                    std::cout << "[BENCH] CI:  sumC=" << sumC << "  Cmax=" << cmax << "  time=" << ms << " ms\n";
+                    appendCsvRow(csv, currentInstance, "CheapestInsertion", (int)tasks.size(), threads, ms, sumC, cmax);
                 }
                 // LS
                 {
                     auto t0 = std::chrono::steady_clock::now();
                     auto res = localSearch2Swap(tasks, lp, threads);
                     long long sumC = res.sumC;
-                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    long long cmax = calculateMakespan(tasks, res.order);
+                    long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - t0).count();
-                    std::cout << "[BENCH] LS: sumC=" << sumC << " time=" << ms << " ms\n";
-                    appendCsvRow(csv, currentInstance, "LocalSearch", (int)tasks.size(), threads, ms, sumC);
+                    std::cout << "[BENCH] LS:   sumC=" << sumC << "  Cmax=" << cmax << "  time=" << ms << " ms\n";
+                    appendCsvRow(csv, currentInstance, "LocalSearch", (int)tasks.size(), threads, ms, sumC, cmax);
                 }
                 break;
             }
@@ -403,7 +418,7 @@ int main() {
                 LsParams lp;
                 lp.timeBudgetMs = timeBudgetMs;
                 lp.seed = seed;
-                lp.maxNoImproveTries = noImproveFactor * 200; // przykładowa wielkość
+                lp.maxNoImproveTries = noImproveFactor * 200;
 
                 runBatchExperiments(folder, csv, threads, lp);
                 break;

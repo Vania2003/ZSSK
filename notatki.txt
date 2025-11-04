@@ -1,0 +1,85 @@
+1) A_equal_5.txt
+5
+10 10 10 10 10
+
+SPT-kolejność: dowolna (wszystkie równe)
+Cmax = 50
+∑Ci = 150 (10,20,30,40,50)
+
+
+2) B_increasing_6.txt
+6
+1 2 3 4 5 6
+
+SPT: [1,2,3,4,5,6]
+Cmax = 21
+∑Ci = 56 (1,3,6,10,15,21)
+
+
+3) C_decreasing_6.txt
+6
+9 8 7 6 5 4
+
+SPT: [4,5,6,7,8,9]
+Cmax = 39
+∑Ci = 119 (4,9,15,22,30,39)
+
+4) D_ties_8.txt (dużo remisów + dwa wielkie)
+8
+5 5 5 1 100 2 2 50
+
+SPT: [1,2,2,5,5,5,50,100]
+Cmax = 170
+∑Ci = 294 (1,3,5,10,15,20,70,170)
+
+5) E_bimodal_12.txt (małe + bardzo duże)
+12
+1 2 2 3 3 4 4 5 80 90 100 120
+
+SPT: jak w pliku (już rosnąco)
+Cmax = 414
+∑Ci = 1092
+prefiksy: 1,3,5,8,11,15,19,24,104,194,294,414 (suma = 1092)
+
+6) F_spread_15.txt (ciąg „fibopodobny”)
+15
+1 1 1 1 1 2 2 3 5 8 13 21 34 55 89
+
+SPT: jak w pliku
+Cmax = 237
+∑Ci = 660
+
+7) G_one_huge_20.txt (19 jedynek + jeden potwór)
+20
+1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1000
+
+SPT: 19×1, potem 1000
+Cmax = 1019
+∑Ci = 1209
+(jedynki dają 209, +1000 na końcu)
+
+8) H_two_groups_16.txt (pół na pół: 1 i 20)
+16
+20 20 20 20 20 20 20 20 1 1 1 1 1 1 1 1
+
+SPT: osiem jedynek, potem osiem 20
+Cmax = 168
+∑Ci = 820
+
+9) I_many_ties_25.txt (dużo remisów + kilka dużych na koniec)
+25
+7 7 7 7 7 7 7 7 7 7 3 3 3 3 3 3 3 3 3 3 50 40 30 20 10
+
+SPT: 10×3, 10×7, 10,20,30,40,50
+Cmax = 250
+∑Ci = 1700
+
+10) J_large_50.txt (większy, ale „czysty” do weryfikacji)
+Repetujemy wartości 1..10 pięć razy:
+
+50
+1 2 3 4 5 6 7 8 9 10  1 2 3 4 5 6 7 8 9 10  1 2 3 4 5 6 7 8 9 10  1 2 3 4 5 6 7 8 9 10  1 2 3 4 5 6 7 8 9 10
+
+SPT: pięć jedynek, pięć dwójek, ..., pięć dziesiątek
+Cmax = 275
+∑Ci = 4950

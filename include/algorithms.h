@@ -24,3 +24,6 @@ struct LsResult {
 
 LsResult localSearch2Swap(const std::vector<Task>& tasks,
                           const LsParams& params, int threads);
+
+long long calculateMakespan(const std::vector<Task>& tasks,
+                            const std::vector<int>& order);
