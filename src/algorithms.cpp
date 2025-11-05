@@ -129,61 +129,86 @@ LsResult localSearch2Swap(const std::vector<Task>& tasks,
     std::shuffle(order.begin(), order.end(), gen);
 
     long long bestSum = calculateTotalCompletionTime(tasks, order);
-    std::mutex bestMutex;
-    std::atomic<bool> improved{true};
+    bool improved = true;
+    int noImprove = 0;
 
     auto start = std::chrono::steady_clock::now();
 
     while (improved) {
         improved = false;
 
-        if (threads > 1) {
+        long long globalBestDelta = 0;
+        int globalBestI = -1, globalBestJ = -1;
+
+        const std::vector<int> currentOrder = order;
+
+        if (threads > 1 && n > 200) {
+            std::mutex mtx;
             std::atomic<int> iIndex = 0;
-            std::vector<std::thread> pool;
-            for (int t = 0; t < threads; ++t) {
-                pool.emplace_back([&]() {
-                    int i;
-                    while ((i = iIndex++) < n - 1) {
-                        for (int j = i + 1; j < n; ++j) {
-                            std::swap(order[i], order[j]);
-                            long long newSum = calculateTotalCompletionTime(tasks, order);
-                            std::swap(order[i], order[j]);
-                            if (newSum < bestSum) {
-                                std::scoped_lock lock(bestMutex);
-                                if (newSum < bestSum) {
-                                    bestSum = newSum;
-                                    improved = true;
-                                }
-                            }
-                            auto now = std::chrono::steady_clock::now();
-                            if (std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count()
-                                > params.timeBudgetMs)
-                                return;
+
+            auto worker = [&]() {
+                long long localBestDelta = 0;
+                int localBestI = -1, localBestJ = -1;
+
+                while (true) {
+                    int i = iIndex++;
+                    if (i >= n - 1) break;
+
+                    for (int j = i + 1; j < n; ++j) {
+                        std::vector<int> tmp = currentOrder;
+                        std::swap(tmp[i], tmp[j]);
+                        long long newSum = calculateTotalCompletionTime(tasks, tmp);
+                        long long delta = bestSum - newSum;
+                        if (delta > localBestDelta) {
+                            localBestDelta = delta;
+                            localBestI = i;
+                            localBestJ = j;
                         }
                     }
-                });
-            }
+                }
+
+                if (localBestDelta > 0) {
+                    std::scoped_lock lock(mtx);
+                    if (localBestDelta > globalBestDelta) {
+                        globalBestDelta = localBestDelta;
+                        globalBestI = localBestI;
+                        globalBestJ = localBestJ;
+                    }
+                }
+            };
+
+            std::vector<std::thread> pool;
+            for (int t = 0; t < threads; ++t) pool.emplace_back(worker);
             for (auto& th : pool) th.join();
         } else {
             for (int i = 0; i < n - 1; ++i) {
                 for (int j = i + 1; j < n; ++j) {
-                    std::swap(order[i], order[j]);
-                    long long newSum = calculateTotalCompletionTime(tasks, order);
-                    if (newSum < bestSum) {
-                        bestSum = newSum;
-                        improved = true;
-                    } else {
-                        std::swap(order[i], order[j]);
+                    std::vector<int> tmp = order;
+                    std::swap(tmp[i], tmp[j]);
+                    long long newSum = calculateTotalCompletionTime(tasks, tmp);
+                    long long delta = bestSum - newSum;
+                    if (delta > globalBestDelta) {
+                        globalBestDelta = delta;
+                        globalBestI = i;
+                        globalBestJ = j;
                     }
-
-                    auto now = std::chrono::steady_clock::now();
-                    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count()
-                        > params.timeBudgetMs)
-                        break;
                 }
-                if (!improved) continue;
             }
         }
+
+        if (globalBestDelta > 0 && globalBestI >= 0) {
+            std::swap(order[globalBestI], order[globalBestJ]);
+            bestSum -= globalBestDelta;
+            improved = true;
+            noImprove = 0;
+        } else {
+            noImprove++;
+        }
+
+        auto now = std::chrono::steady_clock::now();
+        long long elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+        if (elapsed > params.timeBudgetMs) break;
+        if (noImprove > params.maxNoImproveTries) break;
     }
 
     res.order = order;

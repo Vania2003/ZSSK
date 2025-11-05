@@ -331,7 +331,7 @@ int main() {
                 int threads = askInt("Threads (1/2/4/8)", 1);
                 int timeBudgetMs = askInt("Time budget [ms]", 2000);
                 unsigned int seed = (unsigned int)askInt("Random seed", 42);
-                int noImproveFactor = askInt("No-improve tries factor (×n)", 1000);
+                int noImproveFactor = askInt("No-improve tries factor (x n)", 1000);
 
                 LsParams lp;
                 lp.timeBudgetMs = timeBudgetMs;
@@ -360,7 +360,7 @@ int main() {
                 int threads = askInt("Threads (1/2/4/8)", 1);
                 int timeBudgetMs = askInt("LS: Time budget [ms]", 2000);
                 unsigned int seed = (unsigned int)askInt("Random seed", 42);
-                int noImproveFactor = askInt("No-improve tries factor (×n)", 1000);
+                int noImproveFactor = askInt("No-improve tries factor (x n)", 1000);
 
                 LsParams lp;
                 lp.timeBudgetMs = timeBudgetMs;
@@ -413,7 +413,7 @@ int main() {
                 int threads = askInt("Threads (1/2/4/8)", 4);
                 int timeBudgetMs = askInt("LS: Time budget [ms]", 2000);
                 unsigned int seed = (unsigned int)askInt("Random seed", 42);
-                int noImproveFactor = askInt("No-improve tries factor (×n)", 1000);
+                int noImproveFactor = askInt("No-improve tries factor (x n)", 1000);
 
                 LsParams lp;
                 lp.timeBudgetMs = timeBudgetMs;
